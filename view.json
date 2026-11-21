@@ -1,0 +1,43 @@
+{
+  "active": "claude/sp8f06b1f18062cf1dbc1713b87016f7bf",
+  "spaces": {
+    "claude/sp6d3b51cd2bef4f80f7f608dec516f948": "claude/tb30c73b2a34722f7af5e013a673a771f0",
+    "claude/sp8f06b1f18062cf1dbc1713b87016f7bf": "claude/tb71ed818641d37673fd8bca7b7230451f",
+    "spd3bb8214f5df12563331934687a949c1": "tb4941c2acd294c027a249bccad767216d"
+  },
+  "tabs": {
+    "claude/tb30c73b2a34722f7af5e013a673a771f0": {
+      "focused": "claude/p661ed2e65ec9a70b8e592d5bb5927ef0",
+      "before": [],
+      "zoomed": null,
+      "settled": null
+    },
+    "claude/tb71ed818641d37673fd8bca7b7230451f": {
+      "focused": "claude/p4dd5d0cf80581f2b207dcb3c900632b5",
+      "before": [],
+      "zoomed": null,
+      "settled": null
+    },
+    "tb4941c2acd294c027a249bccad767216d": {
+      "focused": "p937a114a1bc2ab4ba74e8090607c8c64",
+      "before": [],
+      "zoomed": null,
+      "settled": null
+    }
+  },
+  "recent": [],
+  "attention": {
+    "claude/t1": {
+      "word": "done",
+      "seen": true
+    },
+    "claude/t2": {
+      "word": "idle",
+      "seen": true
+    },
+    "t1": {
+      "word": null,
+      "seen": true
+    }
+  }
+}
