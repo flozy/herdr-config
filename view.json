@@ -1,5 +1,5 @@
 {
-  "active": "claude/sp8f06b1f18062cf1dbc1713b87016f7bf",
+  "active": "claude/sp6d3b51cd2bef4f80f7f608dec516f948",
   "spaces": {
     "claude/sp6d3b51cd2bef4f80f7f608dec516f948": "claude/tb30c73b2a34722f7af5e013a673a771f0",
     "claude/sp8f06b1f18062cf1dbc1713b87016f7bf": "claude/tb71ed818641d37673fd8bca7b7230451f",
@@ -32,7 +32,7 @@
       "seen": true
     },
     "claude/t2": {
-      "word": "idle",
+      "word": "done",
       "seen": true
     },
     "t1": {
