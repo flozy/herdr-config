@@ -48,7 +48,7 @@ Voraussetzung: Herdr ist installiert und wurde **einmal gestartet**, damit
    ```sh
    cd ~/.config/herdr-app
    git init
-   git remote add origin git@github.com:<benutzer>/herdr-config.git
+   git remote add origin git@github.com:flozy/herdr-config.git
    git fetch origin
    git checkout -f -B main origin/main
    ```
