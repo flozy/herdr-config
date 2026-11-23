@@ -1,0 +1,31 @@
+# Nur die eigene Oberfläche synchronisieren; alles andere schreibt Herdr pro Rechner selbst.
+/*
+!/.gitignore
+!/keys.json
+!/settings.json
+!/programs.json
+!/themes/
+!/backgrounds/
+!/fonts/
+
+# Eigene Layouts (die mitgelieferten main/terminals/win98 ersetzt Herdr bei jedem Start)
+!/layouts/
+/layouts/main.json
+/layouts/terminals.json
+/layouts/win98.json
+/layouts/win98.svg
+/layouts/*.reset-*
+/layouts/*.old-*
+
+# Eigene Mods (mitgelieferte überschreibt Herdr)
+!/mods/
+/mods/*
+!/mods/my-*/
+!/mods/space-launcher/
+
+# Von Herdr generiert
+*.error
+gpui-kit.d.ts
+herdr.d.ts
+jsconfig.json
+node_modules/
