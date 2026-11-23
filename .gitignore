@@ -1,6 +1,7 @@
 # Nur die eigene Oberfläche synchronisieren; alles andere schreibt Herdr pro Rechner selbst.
 /*
 !/.gitignore
+!/README.md
 !/keys.json
 !/settings.json
 !/programs.json
