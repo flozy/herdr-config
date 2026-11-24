@@ -1,15 +1,16 @@
 // Popup for a machine's "+" in the spaces list: saved folders + commands
-// (e.g. /home/flo/nixos-config + claude), an empty space, or a new entry
+// (e.g. ~/nixos-config + claude), an empty space, or a new entry
 // that is saved for next time. Entries live in shared "space-launcher.presets",
-// keyed by machine ("local" for this computer).
+// keyed by machine ("local" for this computer). "~" is that machine's home; a
+// folder that isn't there says so instead of starting nothing.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { run, props, closeOverlay, theme, shared, setShared } from "herdr";
+import { run, props, closeOverlay, theme, shared, setShared, exec, notify } from "herdr";
 
 const KEY = "space-launcher.presets";
 const SEED = [
-  { folder: "/home/flo/nixos-config", cmd: "claude" },
-  { folder: "/home/flo/.config/herdr-app", cmd: "claude" },
+  { folder: "~/nixos-config", cmd: "claude" },
+  { folder: "~/.config/herdr-app", cmd: "claude" },
 ];
 
 // Plain words become argv; anything with shell syntax runs through sh -lc.
@@ -23,10 +24,10 @@ function argvOf(cmd) {
 export default class SpaceLauncher extends View {
   init(_props, cx) {
     this.handle = cx.focus_handle();
-    this.folder = InputState.new({ placeholder: "/home/flo/projekt" });
+    this.folder = InputState.new({ placeholder: "~/projekt" });
     this.cmd = InputState.new({ placeholder: "claude", value: "claude" });
-    this.folder.on("submit", () => this.addAndStart());
-    this.cmd.on("submit", () => this.addAndStart());
+    this.folder.on("submit", (_e, cx) => this.addAndStart(cx));
+    this.cmd.on("submit", (_e, cx) => this.addAndStart(cx));
     this.handle.focus();
   }
 
@@ -38,27 +39,46 @@ export default class SpaceLauncher extends View {
   }
   save(list) { setShared(KEY, { ...(shared(KEY) ?? {}), [this.mkey()]: list }); }
 
-  start(p) {
-    closeOverlay(props().overlay);
-    const args = { machine: this.machine() ?? "" };
-    if (p?.folder) {
-      args.folder = p.folder;
-      const last = p.folder.replace(/\/+$/, "").split("/").pop();
-      if (last) args.name = last;
-    }
-    const argv = p ? argvOf(p.cmd) : undefined;
-    if (argv) args.argv = argv;
-    run("space.new", args);
+  // Starts a new space every time, even where one for that folder runs already.
+  // The folder is checked (and "~" resolved) on its machine first; the popup
+  // closes only after, since closing it ends its tasks.
+  start(p, cx) {
+    if (this.starting) return;
+    this.starting = true;
+    cx.spawn(async (cx) => {
+      const args = { machine: this.machine() ?? "" };
+      if (p?.folder) {
+        const on = this.machine() ?? undefined;
+        let folder = p.folder.trim();
+        try {
+          const r = await exec("sh", ["-c", 'd=$1; case $d in "~") d=$HOME;; "~/"*) d=$HOME/${d#"~/"};; esac; cd -- "$d" 2>/dev/null && pwd', "sh", folder], { on });
+          folder = r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null;
+        } catch { folder = null; }
+        if (!folder) {
+          this.starting = false;
+          notify({ title: "Ordner nicht gefunden", body: `${p.folder} gibt es auf ${this.machine() ?? "diesem Computer"} nicht. Eintrag mit × entfernen und neu anlegen.`, level: "warning" });
+          cx.notify();
+          return;
+        }
+        args.folder = folder;
+        const last = folder.replace(/\/+$/, "").split("/").pop();
+        if (last) args.name = last;
+      }
+      const argv = p ? argvOf(p.cmd) : undefined;
+      if (argv) args.argv = argv;
+      closeOverlay(props().overlay);
+      run("space.new", args);
+    });
   }
 
-  addAndStart() {
+  addAndStart(cx) {
     const folder = this.folder.value().trim();
     const cmd = this.cmd.value().trim();
     if (!folder && !cmd) return;
     const p = { folder, cmd };
     const list = this.presets().filter(x => !(x.folder === folder && x.cmd === cmd));
     this.save([...list, p]);
-    this.start(p);
+    this.start(p, cx);
   }
 
   render() {
@@ -79,9 +99,9 @@ export default class SpaceLauncher extends View {
       .w_full().bg(t.popover).p(6).text_size(12.8).text_color(t.foreground)
       .child(div().px(9).pt(4).pb(6).text_size(11).text_color(t.dim).child(`Neuer Space auf ${this.machine() ?? "diesem Computer"}`))
       .child(v_flex().id("sl-list").h(Math.min(240, (list.length + 1) * 40)).flex_none().overflow_y_scrollbar()
-        .children(list.map((p, i) => row(`sl-${i}`, (p.folder || "~").replace(/\/+$/, "").split("/").pop() || "/", `${p.folder || "~"}  ·  ${p.cmd ? `$ ${p.cmd}` : "Shell"}`, () => this.start(p),
+        .children(list.map((p, i) => row(`sl-${i}`, (p.folder || "~").replace(/\/+$/, "").split("/").pop() || "/", `${p.folder || "~"}  ·  ${p.cmd ? `$ ${p.cmd}` : "Shell"}`, (_e, cx) => this.start(p, cx),
           () => this.save(list.filter((_, j) => j !== i)))))
-        .child(row("sl-empty", "Leerer Space", "nur eine Shell", () => this.start(null))))
+        .child(row("sl-empty", "Leerer Space", "nur eine Shell", (_e, cx) => this.start(null, cx))))
       .child(div().h(1).my(6).bg(t.border).flex_none())
       .child(v_flex().px(6).pb(4).gap(6).flex_none()
         .child(div().text_size(11).text_color(t.dim).child("Neuer Eintrag: Ordner und Befehl"))
@@ -89,6 +109,6 @@ export default class SpaceLauncher extends View {
         .child(field(this.cmd))
         .child(h_flex().justify_end().child(h_flex().id("sl-add").h(30).px(12).items_center().rounded(7)
           .bg(t.solid).text_color(t.solid_foreground).text_size(12.5).font_medium().cursor_pointer()
-          .hover(s => s.opacity(0.88)).on_click(() => this.addAndStart()).child("Speichern & starten"))));
+          .hover(s => s.opacity(0.88)).on_click((_e, cx) => this.addAndStart(cx)).child("Speichern & starten"))));
   }
 }

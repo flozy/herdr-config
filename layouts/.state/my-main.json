@@ -1,8 +1,18 @@
 {
   "nodes": {
+    "agents": {
+      "size": {
+        "weight": 0.5561853
+      }
+    },
     "sidebar": {
       "size": {
         "px": 379.0
+      }
+    },
+    "spaces": {
+      "size": {
+        "weight": 1.4438146
       }
     }
   },

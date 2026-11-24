@@ -5,7 +5,12 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, agents, shared, setShared } from "herdr";
+import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, agents, shared, setShared, notify } from "herdr";
+
+// As my-spaces/resume.js (a mod can't import from another's folder): the shell command
+// that resumes a saved chat, `claude --mcp-config=x --resume <id>`.
+const q = (s) => (/^[\w@%+=:,./-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, `'\\''`)}'`);
+const resumeCommand = (c) => [...(c.argv ?? ["claude"]), "--resume", c.id].map(q).join(" ");
 
 // Resume chats (my-spaces does the work): mark a running Claude, or forget it.
 const isClaude = (a) => a.app === "claude-code" || a.program?.name === "Claude";
@@ -60,6 +65,28 @@ function items(p, git) {
         ["Close pane", "pane.close", { pane: tg.pane }],
       ];
     }
+    case "machine": {
+      // A machine's header in my-spaces; tg.all: the machines in their shown order.
+      if (!tg.name) return [];
+      const i = (tg.all ?? []).indexOf(tg.name), n = (tg.all ?? []).length;
+      return [
+        ...(i > 0 ? [["Nach oben", "machine.move", { name: tg.name, by: -1 }], ["Ganz nach oben", "machine.move", { name: tg.name, by: -n }]] : []),
+        ...(i !== -1 && i < n - 1 ? [["Nach unten", "machine.move", { name: tg.name, by: 1 }], ["Ganz nach unten", "machine.move", { name: tg.name, by: n }]] : []),
+      ];
+    }
+    case "resume": {
+      // A saved chat in my-spaces' "Fortsetzen" list.
+      const c = (shared("resume.chats") ?? []).find((x) => x.id === tg.id);
+      if (!c) return [];
+      return [
+        ["Öffnen", "resume.open", { id: c.id }],
+        ["Resume-Befehl kopieren", "resume.copy", { text: resumeCommand(c), what: "Resume-Befehl" }],
+        ["Mit Ordner kopieren (cd … && claude)", "resume.copy", { text: `cd ${q(c.folder)} && ${resumeCommand(c)}`, what: "Befehl mit Ordner" }],
+        ["Nur Session-ID kopieren", "resume.copy", { text: c.id, what: "Session-ID" }],
+        ["Umbenennen", "resume.rename", { id: c.id }],
+        ["Fertig: aus der Liste nehmen", "resume.done", { id: c.id }],
+      ];
+    }
     case "tab":
       return [
         ["Rename", "tab.rename", { id: tg.id }],
@@ -89,6 +116,10 @@ function items(p, git) {
 function menuIcon(command) {
   if (command === "resume.mark") return "mods/workspace-chrome/pin.svg";
   if (command === "resume.forget") return "mods/workspace-chrome/pin-off.svg";
+  if (command === "resume.open") return "mods/workspace-chrome/terminal.svg";
+  if (command === "machine.move") return "mods/workspace-chrome/server.svg";
+  if (command === "resume.copy") return "mods/workspace-chrome/files.svg";
+  if (command === "resume.done") return "mods/workspace-chrome/circle-check.svg";
   const name = command.endsWith(".close") ? "x" : command.endsWith(".rename") ? "square-pen" : command.endsWith(".new") ? "plus" : command === "worktree" ? "git-branch" : command === "app.help" ? "terminal" : command === "app.theme" ? "settings" : command === "pane.split" ? "panel-right" : command === "pane.zoom" ? "square" : "terminal";
   return `mods/workspace-chrome/${name}.svg`;
 }
@@ -123,6 +154,22 @@ export default class Menu extends View {
     closeOverlay(props()?.overlay);
     if (it[1] === "resume.mark") setShared("resume.request", { at: Date.now(), ...it[2] });
     else if (it[1] === "resume.forget") setShared("resume.request", { at: Date.now(), forget: it[2].terminal });
+    else if (it[1] === "resume.done") setShared("resume.request", { at: Date.now(), forget: it[2].id });
+    else if (it[1] === "resume.open") setShared("resume.request", { at: Date.now(), open: it[2].id });
+    else if (it[1] === "resume.rename") setShared("resume.request", { at: Date.now(), rename: it[2].id });
+    else if (it[1] === "machine.move") {
+      const all = [...(props()?.target?.all ?? [])];
+      const from = all.indexOf(it[2].name);
+      if (from !== -1) {
+        all.splice(from, 1);
+        all.splice(Math.max(0, Math.min(all.length, from + it[2].by)), 0, it[2].name);
+        setShared("machines.order", all);
+      }
+    }
+    else if (it[1] === "resume.copy") {
+      cx.write_to_clipboard(it[2].text);
+      notify({ title: `${it[2].what} kopiert`, body: it[2].text, level: "info", timeout: 3000 });
+    }
     else if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
     else run(it[1], it[2]);
   }
@@ -149,7 +196,7 @@ export default class Menu extends View {
       .children(
         list.map((it, i) =>
           v_flex()
-            .when(i > 0 && (it[1].startsWith("resume.") !== list[i - 1][1].startsWith("resume.") || it[1].endsWith(".close") || it[1] === "app.help" || (it[1] === "app.theme" && list[i - 1][1] !== "app.theme")), el => el.child(div().mx(7).my(4).h(1).bg(t.border)))
+            .when(i > 0 && (it[1].startsWith("resume.") !== list[i - 1][1].startsWith("resume.") || (it[1] === "resume.copy" && list[i - 1][1] !== "resume.copy") || it[1] === "resume.rename" || it[1].endsWith(".close") || it[1] === "app.help" || (it[1] === "app.theme" && list[i - 1][1] !== "app.theme")), el => el.child(div().mx(7).my(4).h(1).bg(t.border)))
             .child(h_flex()
             .id(`mi-${i}`)
             .h(31)

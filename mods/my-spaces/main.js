@@ -1,12 +1,13 @@
 // Workspace spaces: stable colored avatars, worktrees under their checkout,
 // grouped by machine when more than one is known. After a space's name, the repo
-// its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
-// switch, right-click for its menu, drag to reorder.
+// its first terminal is in now, only where unusual: branch, ahead/behind; at the end
+// of each row its agents' state (working, waiting for you, done, idle, or none). Click to
+// switch, right-click for its menu, drag to reorder. Machines' headers drag to reorder too.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { spaces, machines, panes, agents, terminals, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, notify } from "herdr";
-import { RKEY, RREQ, sessionOf, resumeArgv } from "./resume.js";
+import { RKEY, RREQ, sessionOf, resumeArgv, q, resumeCommand } from "./resume.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -36,6 +37,10 @@ const FALLBACK = 60000;
 // What a stored color name looks like on an avatar (the same in every mod
 // that draws space avatars): one strong color per hue, light and dark alike.
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+
+// A drag that started on "This computer"'s header (its machine is null).
+const LOCAL = "\u0000local";
+const STATUS_TIP = { working: "Agent arbeitet", blocked: "Wartet auf dich", done: "Fertig – noch nicht angesehen", idle: "Agent bereit (idle)", none: "Kein Agent läuft" };
 
 // A space speaks up only when something in it needs you.
 export function glyph(status) {
@@ -90,6 +95,10 @@ export default class Spaces extends View {
     if (!req || req.at === this.lastReq) return;
     this.lastReq = req.at;
     if (req.forget) { this.saveChats(this.chats().filter((c) => c.terminal !== req.forget && c.id !== req.forget)); return; }
+    // From a saved chat's right-click menu (my-menu, tab "resume").
+    const chat = this.chats().find((c) => c.id === (req.open ?? req.rename));
+    if (chat && req.open) { this.openChat(chat, cx); return; }
+    if (chat && req.rename) { this.startRename(chat, cx); return; }
     if (!req.terminal) return;
     cx.spawn(async (cx) => {
       let s = null;
@@ -146,12 +155,44 @@ export default class Spaces extends View {
     return c.terminal ? agents().find((a) => a.address === c.terminal && (a.app === "claude-code" || a.program?.name === "Claude")) : null;
   }
 
-  openChat(c) {
-    const live = this.liveAgent(c);
-    if (live) { run("pane.focus", { pane: live.pane }); return; }
-    if (c.starting && Date.now() - c.starting < 15000) return;
-    this.patchChat(c.id, { starting: Date.now(), terminal: null });
-    run("space.new", { machine: c.machine ?? "", folder: c.folder, name: c.name, argv: [...(c.argv ?? ["claude"]), "--resume", c.id] });
+  // Opens a saved chat, every time: where Claude still runs it, go there; where its
+  // terminal is left with a shell (Claude ended), resume it right there; otherwise
+  // a new space resumes it. A listed agent alone isn't proof: its last report can
+  // outlive Claude, so the terminal's foreground is asked.
+  openChat(c, cx) {
+    if (this.opening === c.id) return;
+    if (c.starting && Date.now() - c.starting < 8000 && !c.terminal) return; // a resume is on its way
+    this.opening = c.id;
+    cx.spawn(async (cx) => {
+      try {
+        const live = this.liveAgent(c);
+        let running = null;
+        if (live) { try { running = await sessionOf(live.address); } catch {} }
+        if (live && running) {
+          if (running.id !== c.id) this.patchChat(c.id, { id: running.id });
+          if (live.pane) { run("space.select", { id: live.space }); run("pane.focus", { terminal: live.address }); }
+          else run("terminal.peek", { terminal: live.address });
+          return;
+        }
+        const pane = c.terminal && panes().find((p) => p.terminal === c.terminal && p.program?.shell);
+        if (pane) {
+          const sp = spaces().find((s) => (s.tabs ?? []).some((t) => t.id === pane.tab));
+          if (sp) run("space.select", { id: sp.id });
+          run("pane.focus", { terminal: c.terminal });
+          const r = await hc(["send", c.terminal, `cd ${q(c.folder)} && ${resumeCommand(c)}`]);
+          if (r.code === 0) { this.patchChat(c.id, { starting: Date.now() }); return; }
+        }
+        this.patchChat(c.id, { starting: Date.now(), terminal: null });
+        run("space.new", { machine: c.machine ?? "", folder: c.folder, name: c.name, argv: [...(c.argv ?? ["claude"]), "--resume", c.id] });
+      } finally {
+        this.opening = null;
+        cx.notify();
+      }
+    });
+  }
+
+  chatMenu(c) {
+    openOverlay({ mod: "my-menu", kind: "popup", width: 270, height: 260, props: { tab: "resume", target: { id: c.id } } });
   }
 
   startRename(c, cx) {
@@ -183,7 +224,8 @@ export default class Spaces extends View {
       const dot = live ? (t[live.status] ?? t.idle) : t.dim;
       if (collapsed) {
         return h_flex().id(`rc-${i}`).h(26).flex_none().justify_center().hover((s) => s.bg(t.hover))
-          .on_click(() => this.openChat(c)).child(div().text_color(dot).child(live ? "●" : "○"));
+          .on_click((_e, cx) => this.openChat(c, cx)).on_mouse_down("right", () => this.chatMenu(c))
+          .child(div().text_color(dot).child(live ? "●" : "○"));
       }
       if (this.editing === c.id) {
         return h_flex().id(`rc-${i}`).h(32).flex_none().px(6).items_center()
@@ -193,8 +235,9 @@ export default class Spaces extends View {
       const sub = [c.machine, c.title !== c.name ? c.title : null, live ? "läuft" : null].filter(Boolean).join(" · ");
       return h_flex().id(`rc-${i}`).h(36).flex_none().px(8).gap(8).items_center().rounded(8).cursor_pointer()
         .hover((s) => s.bg(t.hover))
-        .tooltip(`${c.folder}\nclaude --resume ${c.id}`)
-        .on_click(() => this.openChat(c))
+        .tooltip(`${c.folder}\n${resumeCommand(c)}\nRechtsklick: Menü (Resume-Befehl kopieren …)`)
+        .on_click((_e, cx) => this.openChat(c, cx))
+        .on_mouse_down("right", () => this.chatMenu(c))
         .child(div().w(10).flex_none().text_size(10).text_color(dot).child(live ? "●" : "○"))
         .child(v_flex().flex_1().min_w(0)
           .child(div().truncate().text_color(t.foreground).child(c.name || c.title))
@@ -432,7 +475,7 @@ export default class Spaces extends View {
   grouped(t, collapsed) {
     const rows = this.ordered();
     const draw = (r) => (collapsed ? this.compact(r, t) : this.row(r, t));
-    const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
+    const remote = this.sortMachines([...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])]);
     const loading = m => {
       const layout = machines().find(k => k.name === m)?.layout;
       return layout === "loading" || (!layout && this.machines.some(k => k.name === m && k.state === "connected"))
@@ -448,12 +491,24 @@ export default class Spaces extends View {
       const connected = !m || machine?.state === "connected";
       const rebuilt = this.rebuilt(machine) || !!repair;
       const folded = this.folded.has(m);
-      const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 2 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
-        .cursor_pointer().hover(s => s.bg(t.hover))
-        .on_click((_e, cx) => {
-          folded ? this.folded.delete(m) : this.folded.add(m);
-          localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
-          cx.notify();
+      const from = remote.indexOf(this.mPressed), to = remote.indexOf(m);
+      const dropping = m && this.mPressed && this.mOver === m && this.mPressed !== m;
+      const head = h_flex().relative().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 2 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
+        .rounded(6).cursor_pointer().hover(s => s.bg(t.hover))
+        .when(m && this.mPressed === m && this.mOver !== m, el => el.opacity(0.5))
+        .when(dropping, el => el.child(div().absolute().left(0).right(0).h(2).bg(t.accent)
+          .when(from < to, line => line.bottom(0)).when(from > to, line => line.top(0))))
+        .tooltip(m ? "Klicken: ein-/ausklappen · Ziehen: Reihenfolge ändern" : "Klicken: ein-/ausklappen")
+        .on_mouse_down("left", () => { this.mPressed = m ?? LOCAL; this.mOver = m ?? LOCAL; })
+        .on_mouse_down("right", () => openOverlay({ mod: "my-menu", kind: "popup", width: 230, height: 140, props: { tab: "machine", target: { name: m, all: remote } } }))
+        .on_mouse_move((_e, cx) => this.overMachine(m, cx))
+        .on_mouse_up("left", (_e, cx) => {
+          if (this.mPressed === (m ?? LOCAL)) {
+            folded ? this.folded.delete(m) : this.folded.add(m);
+            localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
+            this.mPressed = this.mOver = null;
+            cx.notify();
+          } else this.dropMachine(m, cx);
         })
         .child(svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none())
         .when(!collapsed, el => el.child(div().flex_1().truncate().child(m ?? "This computer"))
@@ -461,11 +516,13 @@ export default class Spaces extends View {
           .when(rebuilt, el => el.child(h_flex().flex_none().gap(3).items_center()
             .child(div().max_w(140).truncate().child(repair?.error || "rebuilt ·"))
             .child(div().id(`machine-connect-${m}`).text_color(repair?.error ? t.blocked : t.muted)
+              .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
               .hover(s => s.text_color(t.foreground))
               .tooltip(repair?.error || "This machine was rebuilt or replaced. Click to connect to the new one.")
               .on_click((_e, cx) => { cx.stop_propagation(); this.reconnect(machine, cx); })
               .child(repair?.busy ? "Connecting…" : "Connect"))))
           .when(connected, el => el.child(div().id(`machine-add-${m ?? "local"}`).flex_none().px(4).rounded(4).hover(s => s.bg(t.hover).text_color(t.foreground))
+            .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .on_click((_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "space-launcher", kind: "popup", width: 340, height: 420, props: { machine: m } }); }).child("+")))
           .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
           .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
@@ -527,6 +584,7 @@ export default class Spaces extends View {
         this.over = w.id;
       })
       .on_mouse_move((_e, cx) => {
+        if (this.mPressed) return this.overMachine(w.machine ?? null, cx);
         const source = spaces().find(s => s.id === this.pressed);
         const over = source && (source.machine ?? null) === (w.machine ?? null) ? w.id : null;
         if (this.pressed !== null && this.over !== over) {
@@ -535,6 +593,7 @@ export default class Spaces extends View {
         }
       })
       .on_mouse_up("left", (_e, cx) => {
+        if (this.mPressed) return this.dropMachine(w.machine ?? null, cx);
         const from = this.pressed;
         const over = this.over;
         this.pressed = null;
@@ -553,8 +612,56 @@ export default class Spaces extends View {
           .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
-          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
+          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
+          .child(this.statusMark(w, t)),
       );
+  }
+
+  // What runs in a space, after its name: a spinner while an agent works, a dot
+  // when one waits for you or finished, a ring when they're idle, a dash when none runs.
+  statusMark(w, t) {
+    const st = w.status ?? null;
+    const tip = STATUS_TIP[st ?? "none"];
+    const box = div().id(`space-status-${w.id}`).w(14).flex_none().flex().items_center().justify_center().tooltip(tip);
+    if (st === "working") return box.child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(900));
+    if (st === "blocked" || st === "done") return box.text_size(11).text_color(t[st]).child("●");
+    if (st === "idle") return box.text_size(11).text_color(t.idle).child("○");
+    return box.text_size(11).text_color(t.dim).opacity(0.6).child("–");
+  }
+
+  // Machines in the order dragged to (machines.order), new ones after, by name.
+  sortMachines(names) {
+    const order = this.machineOrder();
+    const at = (n) => { const i = order.indexOf(n); return i === -1 ? Infinity : i; };
+    return names.sort((a, b) => at(a) - at(b) || a.localeCompare(b));
+  }
+
+  // Shared (my-menu's "Nach oben/unten" writes it too) and kept in shared.json.
+  machineOrder() {
+    const order = shared("machines.order");
+    if (Array.isArray(order)) return order;
+    try { return JSON.parse(localStorage.getItem("machines.order") ?? "[]"); } catch { return []; }
+  }
+
+  overMachine(m, cx) {
+    const over = m && this.mPressed && this.mPressed !== LOCAL ? m : null;
+    if (this.mPressed && this.mOver !== over) { this.mOver = over; cx.notify(); }
+  }
+
+  // Drops the dragged machine where `m` is; "This computer" stays first.
+  dropMachine(m, cx) {
+    const from = this.mPressed;
+    this.mPressed = this.mOver = null;
+    if (from && from !== LOCAL && m && m !== from) {
+      const names = this.sortMachines([...new Set([...spaces().map(s => s.machine).filter(Boolean), ...this.machines.map(k => k.name), ...Object.keys(this.reconnecting)])]);
+      const fi = names.indexOf(from), ti = names.indexOf(m);
+      if (fi !== -1 && ti !== -1) {
+        names.splice(fi, 1);
+        names.splice(ti, 0, from);
+        setShared("machines.order", names);
+      }
+    }
+    cx.notify();
   }
 
   compact({ w, i }, t) {
@@ -592,7 +699,11 @@ export default class Spaces extends View {
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().flex_1().min_h(0).px(8).pb(14).overflow_y_scrollbar().mode("always")
-        .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
+        .on_mouse_up("left", (_e, cx) => {
+          this.pressed = null;
+          if (this.mPressed) return this.dropMachine(this.mOver === LOCAL ? null : this.mOver, cx);
+          cx.notify();
+        })
         .children([...this.resumeSection(t, collapsed), ...this.grouped(t, collapsed)]));
   }
 }

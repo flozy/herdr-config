@@ -54,3 +54,11 @@ export function resumeArgv(argv) {
   }
   return out;
 }
+
+// One word for sh: as is when safe, else in single quotes.
+export const q = (s) => (/^[\w@%+=:,./-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, `'\\''`)}'`);
+
+// What a saved chat is resumed with in a shell: `claude --mcp-config=x --resume <id>`.
+export function resumeCommand(c) {
+  return [...(c.argv ?? ["claude"]), "--resume", c.id].map(q).join(" ");
+}
